@@ -1,0 +1,10 @@
+[
+  {
+    "originalRepo": "https://github.com/pkarpovich/commit-author-refresher-test.git",
+    "targetRepo": "https://github.com/pkarpovich/commit-author-refresher-test.git",
+    "author": {
+        "name": "Pavel Karpovich",
+        "email": "pavel.karpovich@outlook.com"
+    }
+  }
+]
