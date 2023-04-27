@@ -35,11 +35,50 @@ func main() {
 	}
 
 	for _, repo := range repositories {
+		if !isRequiresAuthorUpdate(repo) {
+			fmt.Printf("Repository %s does not require author update\n", repo.OriginalRepo)
+			continue
+		}
+
 		processRepository(repo)
 	}
 }
 
-func processRepository(repo Repository) {
+func isRequiresAuthorUpdate(repo Repository) bool {
+	tempRepoDir, err := os.MkdirTemp("", "commit-author-refresher-target-*")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer os.RemoveAll(tempRepoDir)
+
+	runCommand("git", "clone", "--bare", repo.TargetRepo, tempRepoDir)
+
+	branchesOut, err := exec.Command("git", "-C", tempRepoDir, "branch", "--format=%(refname)").Output()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	branches := strings.Split(string(branchesOut), "\n")
+	for _, branch := range branches {
+		branch = strings.TrimSpace(branch)
+		if branch == "" {
+			continue
+		}
+
+		cmd := exec.Command("git", "-C", tempRepoDir, "log", "--format=%ae", branch)
+		authorEmailsBytes, err := cmd.Output()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		authorEmails := string(authorEmailsBytes)
+		if !strings.Contains(authorEmails, repo.Author.Email) {
+			return true
+		}
+	}
+
+	return false
+}func processRepository(repo Repository) {
 	originalRepo := repo.OriginalRepo
 	targetRepo := repo.TargetRepo
 	newAuthorEmail := repo.Author.Email
