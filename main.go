@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/pkarpovich/commit-author-refresher/repository"
 )
 
 type options struct {
@@ -28,7 +29,7 @@ func main() {
 		log.Fatalf("Failed to read configuration file: %s", opts.ConfigFile)
 	}
 
-	var repositories []Repository
+	var repositories []repository.Repository
 	err = json.Unmarshal(data, &repositories)
 	if err != nil {
 		log.Fatalf("Failed to parse configuration file: %s. Error: %v", opts.ConfigFile, err)
@@ -36,18 +37,18 @@ func main() {
 
 	if opts.Project != "" {
 		repo := find(repositories, opts.Project)
-		ctx := RepositoryContext{Repo: *repo}
+		ctx := repository.RepositoryContext{Repo: *repo}
 		ctx.ProcessRepository()
 		return
 	}
 
 	for _, repo := range repositories {
-		ctx := RepositoryContext{Repo: repo}
+		ctx := repository.RepositoryContext{Repo: repo}
 		ctx.ProcessRepository()
 	}
 }
 
-func find(repositories []Repository, name string) *Repository {
+func find(repositories []repository.Repository, name string) *repository.Repository {
 	for _, repo := range repositories {
 		if repo.Name == name {
 			return &repo
