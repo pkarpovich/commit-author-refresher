@@ -1,0 +1,11 @@
+[
+  {
+    "originalRepo": "https://github.com/BitAdventure/morfyus-frontend.git",
+    "targetRepo": "https://github.com/pkarpovich/commit-author-refresher-test.git",
+    "author": {
+      "name": "Pavel Karpovich",
+      "email": "pavel.karpovich@outlook.com"
+    },
+    "excludedAuthors": ["roobel2005@gmail.com"]
+  }
+]

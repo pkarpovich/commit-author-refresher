@@ -16,6 +16,7 @@ type Author struct {
 }
 
 type Repository struct {
+	Name            string   `json:"name"`
 	OriginalRepo    string   `json:"originalRepo"`
 	TargetRepo      string   `json:"targetRepo"`
 	Author          Author   `json:"author"`

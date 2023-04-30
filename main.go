@@ -4,24 +4,55 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+
+	"github.com/jessevdk/go-flags"
 )
 
-func main() {
-	configFile := "config.json"
+type options struct {
+	ConfigFile string `short:"f" long:"file" description:"config file" default:"caf-config.json"`
+	Project    string `short:"p" long:"project" description:"run only for the specified project"`
+}
 
-	data, err := os.ReadFile(configFile)
+func main() {
+	var opts options
+	p := flags.NewParser(&opts, flags.PrintErrors|flags.PassDoubleDash|flags.HelpFlag)
+	if _, err := p.Parse(); err != nil {
+		if err.(*flags.Error).Type != flags.ErrHelp {
+			os.Exit(1)
+		}
+		os.Exit(2)
+	}
+
+	data, err := os.ReadFile(opts.ConfigFile)
 	if err != nil {
-		log.Fatalf("Failed to read configuration file: %s", configFile)
+		log.Fatalf("Failed to read configuration file: %s", opts.ConfigFile)
 	}
 
 	var repositories []Repository
 	err = json.Unmarshal(data, &repositories)
 	if err != nil {
-		log.Fatalf("Failed to parse configuration file: %s. Error: %v", configFile, err)
+		log.Fatalf("Failed to parse configuration file: %s. Error: %v", opts.ConfigFile, err)
+	}
+
+	if opts.Project != "" {
+		repo := find(repositories, opts.Project)
+		ctx := RepositoryContext{Repo: *repo}
+		ctx.ProcessRepository()
+		return
 	}
 
 	for _, repo := range repositories {
 		ctx := RepositoryContext{Repo: repo}
 		ctx.ProcessRepository()
 	}
+}
+
+func find(repositories []Repository, name string) *Repository {
+	for _, repo := range repositories {
+		if repo.Name == name {
+			return &repo
+		}
+	}
+
+	return nil
 }
