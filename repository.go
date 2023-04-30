@@ -57,10 +57,15 @@ func processRepository(repo Repository) {
 		}
 	}
 
-	//replaceOriginalUser, err := getReplaceOriginalUsernameString(repo)
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
+	originalUser, err := extractUsernameFromRepoURL(repo.OriginalRepo)
+	if err != nil {
+		log.Fatalf("error extracting username from originalRepo: %v", err)
+	}
+
+	targetUser, err := extractUsernameFromRepoURL(repo.TargetRepo)
+	if err != nil {
+		log.Fatalf("error extracting username from targetRepo: %v", err)
+	}
 
 	excludedEmailsString := prepareExcludedEmails(repo)
 
@@ -69,11 +74,16 @@ func processRepository(repo Repository) {
 			if commit.committer_email not in [%s]:
 				commit.committer_name = b"%s"
 				commit.committer_email = b"%s"
+
 			if commit.author_email not in [%s]:
 				commit.author_name = b"%s"
 				commit.author_email = b"%s"
+
+			commit.message = commit.message.replace(b"%s", b"%s")
 			`,
-			excludedEmailsString, newAuthorName, newAuthorEmail, excludedEmailsString, newAuthorName, newAuthorEmail,
+			excludedEmailsString, newAuthorName, newAuthorEmail,
+			excludedEmailsString, newAuthorName, newAuthorEmail,
+			originalUser, targetUser,
 		),
 	)
 
@@ -81,24 +91,7 @@ func processRepository(repo Repository) {
 
 	runCommand("git", "push", "--all", "--force", "target-repo")
 
-	fmt.Printf("Updated commits have been pushed to the target repository: %s\n", targetRepo)
-}
-
-func getReplaceOriginalUsernameString(repo Repository) (string, error) {
-	originalUser, err := extractUsernameFromRepoURL(repo.OriginalRepo)
-	if err != nil {
-		return "", fmt.Errorf("error extracting username from originalRepo: %v", err)
-	}
-
-	targetUser, err := extractUsernameFromRepoURL(repo.TargetRepo)
-	if err != nil {
-		return "", fmt.Errorf("error extracting username from targetRepo: %v", err)
-	}
-
-	// Add the following line before the git filter-branch command
-	replaceOriginalUser := fmt.Sprintf("export GIT_MSG=$(echo \"$GIT_MSG\" | sed 's/%s/%s/g');", originalUser, targetUser)
-
-	return replaceOriginalUser, nil
+	log.Printf("Updated commits have been pushed to the target repository: %s\n", targetRepo)
 }
 
 func runCommand(name string, arg ...string) {
