@@ -21,6 +21,7 @@ func main() {
 	}
 
 	for _, repo := range repositories {
-		processRepository(repo)
+		ctx := RepositoryContext{Repo: repo}
+		ctx.ProcessRepository()
 	}
 }

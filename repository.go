@@ -22,18 +22,22 @@ type Repository struct {
 	ExcludedAuthors []string `json:"excludedAuthors"`
 }
 
-func processRepository(repo Repository) {
+type RepositoryContext struct {
+	Repo Repository
+}
+
+func (ctx *RepositoryContext) ProcessRepository() {
 	tempRepoDir, err := prepareTempFolder()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer os.RemoveAll(tempRepoDir)
 
-	initOriginalRepo(repo)
-	updateCommits(repo)
-	pushChangesToTargetRepo(repo)
+	ctx.initOriginalRepo()
+	ctx.updateCommits()
+	ctx.pushChangesToTargetRepo()
 
-	log.Printf("Updated commits have been pushed to the target repository: %s\n", repo.TargetRepo)
+	log.Printf("Updated commits have been pushed to the target repository: %s\n", ctx.Repo.TargetRepo)
 }
 
 func prepareTempFolder() (string, error) {
@@ -75,7 +79,16 @@ func runCommandWithOutput(name string, arg ...string) (string, error) {
 	return out.String(), nil
 }
 
-func initBranches() {
+func extractUsernameFromRepoURL(repoURL string) (string, error) {
+	re := regexp.MustCompile(`https://github\.com/([^/]+)/[^/]+\.git`)
+	matches := re.FindStringSubmatch(repoURL)
+	if len(matches) == 0 {
+		return "", fmt.Errorf("failed to extract username from repository URL: %s", repoURL)
+	}
+	return matches[1], nil
+}
+
+func (ctx *RepositoryContext) initBranches() {
 	branchesOut, err := runCommandWithOutput("git", "branch", "-r")
 	if err != nil {
 		log.Fatalf("error getting branches: %v", err)
@@ -90,25 +103,16 @@ func initBranches() {
 	}
 }
 
-func initOriginalRepo(repo Repository) {
+func (ctx *RepositoryContext) initOriginalRepo() {
 	runCommand("git", "init")
-	runCommand("git", "remote", "add", "old-repo", repo.OriginalRepo)
+	runCommand("git", "remote", "add", "old-repo", ctx.Repo.OriginalRepo)
 	runCommand("git", "fetch", "old-repo")
 
-	initBranches()
+	ctx.initBranches()
 }
 
-func extractUsernameFromRepoURL(repoURL string) (string, error) {
-	re := regexp.MustCompile(`https://github\.com/([^/]+)/[^/]+\.git`)
-	matches := re.FindStringSubmatch(repoURL)
-	if len(matches) == 0 {
-		return "", fmt.Errorf("failed to extract username from repository URL: %s", repoURL)
-	}
-	return matches[1], nil
-}
-
-func prepareExcludedEmails(repo Repository) string {
-	excludedAuthors := append(repo.ExcludedAuthors, repo.Author.Email)
+func (ctx *RepositoryContext) prepareExcludedEmails() string {
+	excludedAuthors := append(ctx.Repo.ExcludedAuthors, ctx.Repo.Author.Email)
 
 	excludedAuthorsBytes := make([]string, len(excludedAuthors))
 	for i, email := range excludedAuthors {
@@ -118,18 +122,18 @@ func prepareExcludedEmails(repo Repository) string {
 	return strings.Join(excludedAuthorsBytes, ",")
 }
 
-func updateCommits(repo Repository) {
-	originalUser, err := extractUsernameFromRepoURL(repo.OriginalRepo)
+func (ctx *RepositoryContext) updateCommits() {
+	originalUser, err := extractUsernameFromRepoURL(ctx.Repo.OriginalRepo)
 	if err != nil {
 		log.Fatalf("error extracting username from originalRepo: %v", err)
 	}
 
-	targetUser, err := extractUsernameFromRepoURL(repo.TargetRepo)
+	targetUser, err := extractUsernameFromRepoURL(ctx.Repo.TargetRepo)
 	if err != nil {
 		log.Fatalf("error extracting username from targetRepo: %v", err)
 	}
 
-	excludedEmailsString := prepareExcludedEmails(repo)
+	excludedEmailsString := ctx.prepareExcludedEmails()
 
 	runCommand("git", "filter-repo", "--force", "--commit-callback",
 		fmt.Sprintf(`
@@ -143,14 +147,14 @@ func updateCommits(repo Repository) {
 
 			commit.message = commit.message.replace(b"%s", b"%s")
 			`,
-			excludedEmailsString, repo.Author.Name, repo.Author.Email,
-			excludedEmailsString, repo.Author.Name, repo.Author.Email,
+			excludedEmailsString, ctx.Repo.Author.Name, ctx.Repo.Author.Email,
+			excludedEmailsString, ctx.Repo.Author.Name, ctx.Repo.Author.Email,
 			originalUser, targetUser,
 		),
 	)
 }
 
-func pushChangesToTargetRepo(repo Repository) {
-	runCommand("git", "remote", "add", "target-repo", repo.TargetRepo)
+func (ctx *RepositoryContext) pushChangesToTargetRepo() {
+	runCommand("git", "remote", "add", "target-repo", ctx.Repo.TargetRepo)
 	runCommand("git", "push", "--all", "--force", "target-repo")
 }
