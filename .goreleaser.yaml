@@ -1,0 +1,30 @@
+dist: bin
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    goarm:
+      - 6
+      - 7
+
+source:
+  enabled: true
+
+release:
+  prerelease: auto
+
+brews:
+  - tap:
+      owner: pkarpovich
+      name: homebrew-apps
+    commit_author:
+      name: Pavel Karpovich
+      email: pavel.karpovich@outlook.com
+    homepage: https://github.com/pkarpovich/commit-author-refresher
+    install: |
+      bin.install "commit-author-refresher"
