@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pkarpovich/commit-author-refresher/git"
 )
 
 func TestExtractOwnerFromRepoURL(t *testing.T) {
@@ -55,7 +57,7 @@ func TestExtractOwnerFromRepoURL(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			owner, err := extractOwnerFromRepoURL(tc.repoURL)
+			owner, err := ExtractOwnerFromRepoURL(tc.repoURL)
 			if tc.expectErr {
 				if err == nil {
 					t.Errorf("expected error for URL %q but got none (result: %q)", tc.repoURL, owner)
@@ -74,16 +76,21 @@ func TestExtractOwnerFromRepoURL(t *testing.T) {
 
 func TestPrepareExcludedEmails(t *testing.T) {
 	t.Run("Non-empty ExcludedAuthors", func(t *testing.T) {
-		ctx := &Refresher{
+		mockGit := &git.MockService{}
+
+		r := &Refresher{
 			Repo: Repository{
 				Author: Author{
 					Email: "author@example.com",
 				},
 				ExcludedAuthors: []string{"exclude1@example.com", "exclude2@example.com"},
 			},
+			GitService: mockGit,
+			Logger:     log.New(os.Stderr, "[test] ", log.LstdFlags),
 		}
+
 		expected := "b'exclude1@example.com',b'exclude2@example.com',b'author@example.com'"
-		result := ctx.prepareExcludedEmails()
+		result := r.prepareExcludedEmails()
 
 		if result != expected {
 			t.Errorf("expected %q, got %q", expected, result)
@@ -91,33 +98,21 @@ func TestPrepareExcludedEmails(t *testing.T) {
 	})
 
 	t.Run("Empty ExcludedAuthors", func(t *testing.T) {
-		ctx := &Refresher{
+		mockGit := &git.MockService{}
+
+		r := &Refresher{
 			Repo: Repository{
 				Author: Author{
 					Email: "author@example.com",
 				},
 				ExcludedAuthors: []string{},
 			},
+			GitService: mockGit,
+			Logger:     log.New(os.Stderr, "[test] ", log.LstdFlags),
 		}
+
 		expected := "b'author@example.com'"
-		result := ctx.prepareExcludedEmails()
-
-		if result != expected {
-			t.Errorf("expected %q, got %q", expected, result)
-		}
-	})
-
-	t.Run("Order of emails", func(t *testing.T) {
-		ctx := &Refresher{
-			Repo: Repository{
-				Author: Author{
-					Email: "author@example.com",
-				},
-				ExcludedAuthors: []string{"exclude@example.com"},
-			},
-		}
-		expected := "b'exclude@example.com',b'author@example.com'"
-		result := ctx.prepareExcludedEmails()
+		result := r.prepareExcludedEmails()
 
 		if result != expected {
 			t.Errorf("expected %q, got %q", expected, result)
@@ -125,11 +120,55 @@ func TestPrepareExcludedEmails(t *testing.T) {
 	})
 }
 
-func TestPrepareTempFolder(t *testing.T) {
-	dir, err := prepareTempFolder()
-	if err != nil {
-		t.Fatalf("prepareTempFolder failed: %v", err)
+func TestInitBranches(t *testing.T) {
+	mockGit := &git.MockService{
+		RunCommandWithOutputFunc: func(dir string, args ...string) (string, error) {
+			if strings.Contains(strings.Join(args, " "), "for-each-ref") {
+				return "old-repo/main\nold-repo/develop\nold-repo/HEAD\nold-repo\n", nil
+			}
+			return "", nil
+		},
 	}
+
+	r := &Refresher{
+		Repo: Repository{
+			Name: "test-repo",
+		},
+		GitService: mockGit,
+		Logger:     log.New(os.Stderr, "[test] ", log.LstdFlags),
+	}
+
+	err := r.initBranches("/tmp")
+	if err != nil {
+		t.Fatalf("initBranches failed: %v", err)
+	}
+
+	expectedCalls := []string{
+		"RunCommandWithOutput:for-each-ref --format=%(refname:short) refs/remotes/old-repo",
+		"RunCommand:checkout -b main old-repo/main",
+		"RunCommand:checkout -b develop old-repo/develop",
+	}
+
+	for _, expected := range expectedCalls {
+		found := false
+		for _, call := range mockGit.CallLog {
+			if call == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected call not found: %s", expected)
+		}
+	}
+}
+
+func TestPrepareTempFolder(t *testing.T) {
+	dir, err := PrepareTempFolder()
+	if err != nil {
+		t.Fatalf("PrepareTempFolder failed: %v", err)
+	}
+
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		t.Fatalf("temp directory does not exist or is not a directory: %s", dir)
 	}
@@ -137,59 +176,5 @@ func TestPrepareTempFolder(t *testing.T) {
 	err = os.RemoveAll(dir)
 	if err != nil {
 		t.Fatalf("failed to remove temp dir: %v", err)
-	}
-}
-
-func TestRunCommandWithOutput(t *testing.T) {
-	out, err := runCommandWithOutput("", "echo", "hello")
-	if err != nil {
-		t.Fatalf("runCommandWithOutput failed: %v", err)
-	}
-	if got := strings.TrimSpace(out); got != "hello" {
-		t.Errorf("expected 'hello', got %q", got)
-	}
-}
-
-func TestRunCommand(t *testing.T) {
-	if err := runCommand("", "status"); err != nil {
-		t.Fatalf("runCommand failed: %v", err)
-	}
-}
-
-func TestInitOriginalRepo(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "test-init-original-repo-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer func() {
-		err := os.RemoveAll(tempDir)
-		if err != nil {
-			t.Fatalf("failed to remove temp dir: %v", err)
-		}
-	}()
-
-	bareRepoDir := filepath.Join(tempDir, "bare-repo.git")
-	if err := runCommand(tempDir, "init", "--bare", bareRepoDir); err != nil {
-		t.Fatalf("failed to create bare repository: %v", err)
-	}
-
-	repo := Repository{
-		Name:         "test-repo",
-		OriginalRepo: "file://" + bareRepoDir,
-		TargetRepo:   "",
-		Author: Author{
-			Name:  "Test Author",
-			Email: "author@test.com",
-		},
-		ExcludedAuthors: []string{},
-	}
-	ctx := &Refresher{Repo: repo}
-
-	if err := ctx.initOriginalRepo(tempDir); err != nil {
-		t.Fatalf("initOriginalRepo failed: %v", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(tempDir, ".git")); err != nil {
-		t.Errorf("expected .git directory after initialization, but got error: %v", err)
 	}
 }

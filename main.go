@@ -1,107 +1,85 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
-	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"strings"
+	"time"
 
+	"github.com/pkarpovich/commit-author-refresher/config"
+	"github.com/pkarpovich/commit-author-refresher/git"
 	"github.com/pkarpovich/commit-author-refresher/repository"
 )
 
 type options struct {
-	ConfigFile string `short:"f" long:"file" description:"Configuration file" default:"caf-config.json"`
-	Project    string `short:"p" long:"project" description:"Run only for the specified project"`
+	ConfigFile string
+	Project    string
+	Verbose    bool
+	Timeout    time.Duration
 }
 
 func main() {
+	logger := log.New(os.Stdout, "[caf] ", log.LstdFlags)
+
 	opts := parseFlags()
-	repositories, err := readConfig(opts.ConfigFile)
+
+	if !opts.Verbose {
+		logger.SetOutput(os.Stderr)
+	}
+
+	gitService := git.NewService(opts.Timeout)
+	validator := &config.DefaultValidator{}
+
+	repositories, err := config.ReadConfig(opts.ConfigFile, validator)
 	if err != nil {
-		log.Fatalf("Failed to read config: %v", err)
+		logger.Fatalf("Failed to read config: %v", err)
 	}
 
 	if opts.Project != "" {
-		repo, err := findRepository(repositories, opts.Project)
+		repo, err := config.FindRepository(repositories, opts.Project)
 		if err != nil {
-			log.Fatalf("Project %q not found: %v", opts.Project, err)
+			logger.Fatalf("Project %q not found: %v", opts.Project, err)
 		}
-		refresher := repository.Refresher{Repo: *repo}
+
+		refresher := repository.NewRefresher(*repo, gitService, logger)
 		if err := refresher.ProcessRepository(); err != nil {
-			log.Fatalf("Failed to process repository %q: %v", opts.Project, err)
+			logger.Fatalf("Failed to process repository %q: %v", opts.Project, err)
 		}
+
+		logger.Printf("Successfully processed repository: %s", opts.Project)
 		return
 	}
 
 	for _, repo := range repositories {
-		refresher := repository.Refresher{Repo: repo}
+		logger.Printf("Processing repository: %s", repo.Name)
+
+		refresher := repository.NewRefresher(repo, gitService, logger)
 		if err := refresher.ProcessRepository(); err != nil {
-			log.Fatalf("Failed to process repository %q: %v", repo.Name, err)
+			logger.Fatalf("Failed to process repository %q: %v", repo.Name, err)
 		}
+
+		logger.Printf("Successfully processed repository: %s", repo.Name)
 	}
+
+	logger.Println("All repositories processed successfully")
 }
 
 func parseFlags() options {
 	var opts options
 
-	configFile := flag.String("f", "caf-config.json", "Configuration file")
+	flag.StringVar(&opts.ConfigFile, "f", "caf-config.json", "Configuration file")
 	flag.StringVar(&opts.ConfigFile, "file", "caf-config.json", "Configuration file")
 
-	project := flag.String("p", "", "Run only for the specified project")
+	flag.StringVar(&opts.Project, "p", "", "Run only for the specified project")
 	flag.StringVar(&opts.Project, "project", "", "Run only for the specified project")
+
+	flag.BoolVar(&opts.Verbose, "v", false, "Enable verbose output")
+	flag.BoolVar(&opts.Verbose, "verbose", false, "Enable verbose output")
+
+	flag.DurationVar(&opts.Timeout, "t", 2*time.Minute, "Command execution timeout")
+	flag.DurationVar(&opts.Timeout, "timeout", 2*time.Minute, "Command execution timeout")
 
 	flag.Parse()
 
-	if *configFile != "caf-config.json" {
-		opts.ConfigFile = *configFile
-	}
-
-	if *project != "" {
-		opts.Project = *project
-	}
-
 	return opts
-}
-
-func readConfig(configFile string) ([]repository.Repository, error) {
-	workDir, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	absPath, err := filepath.Abs(configFile)
-	if err != nil {
-		return nil, fmt.Errorf("invalid configuration file path %q: %w", configFile, err)
-	}
-
-	if !strings.HasPrefix(absPath, workDir) {
-		return nil, fmt.Errorf("configuration file must be within the current directory")
-	}
-
-	if !strings.HasSuffix(absPath, ".json") {
-		return nil, fmt.Errorf("configuration file must have .json extension")
-	}
-
-	data, err := os.ReadFile(filepath.Clean(absPath))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read configuration file %q: %w", configFile, err)
-	}
-
-	var repositories []repository.Repository
-	if err = json.Unmarshal(data, &repositories); err != nil {
-		return nil, fmt.Errorf("failed to parse configuration file %q: %w", configFile, err)
-	}
-	return repositories, nil
-}
-
-func findRepository(repos []repository.Repository, name string) (*repository.Repository, error) {
-	for i := range repos {
-		if repos[i].Name == name {
-			return &repos[i], nil
-		}
-	}
-	return nil, fmt.Errorf("repository with name %q not found", name)
 }
