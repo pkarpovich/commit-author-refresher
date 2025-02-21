@@ -2,14 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/jessevdk/go-flags"
 	"github.com/pkarpovich/commit-author-refresher/repository"
 )
 
@@ -47,14 +46,23 @@ func main() {
 
 func parseFlags() options {
 	var opts options
-	parser := flags.NewParser(&opts, flags.PrintErrors|flags.PassDoubleDash|flags.HelpFlag)
-	if _, err := parser.Parse(); err != nil {
-		var flagsErr *flags.Error
-		if errors.As(err, &flagsErr) && errors.Is(flagsErr.Type, flags.ErrHelp) {
-			os.Exit(2)
-		}
-		os.Exit(1)
+
+	configFile := flag.String("f", "caf-config.json", "Configuration file")
+	flag.StringVar(&opts.ConfigFile, "file", "caf-config.json", "Configuration file")
+
+	project := flag.String("p", "", "Run only for the specified project")
+	flag.StringVar(&opts.Project, "project", "", "Run only for the specified project")
+
+	flag.Parse()
+
+	if *configFile != "caf-config.json" {
+		opts.ConfigFile = *configFile
 	}
+
+	if *project != "" {
+		opts.Project = *project
+	}
+
 	return opts
 }
 
