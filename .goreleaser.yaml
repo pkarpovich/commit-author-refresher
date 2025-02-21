@@ -1,4 +1,4 @@
-dist: bin
+version: 2
 
 builds:
   - env:
@@ -12,19 +12,22 @@ builds:
       - 6
       - 7
 
-source:
-  enabled: true
-
-release:
-  prerelease: auto
-
 brews:
-  - tap:
+  - name: commit-author-refresher
+    repository:
       owner: pkarpovich
       name: homebrew-apps
     commit_author:
       name: Pavel Karpovich
       email: pavel.karpovich@outlook.com
     homepage: https://github.com/pkarpovich/commit-author-refresher
+    description: Refreshes commit author in git history
     install: |
       bin.install "commit-author-refresher"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
