@@ -2,7 +2,26 @@
 
 Commit Author Refresher is a tool to update the commit author information in a git repository. It takes a configuration file as input and processes each repository specified in the config. The tool rewrites the commit history, changing the author and committer names and emails to the desired values, and pushes the changes to a target repository.
 
+## Pre-requisites
+Tool uses git-filter-repo to rewrite the commit history. To install git-filter-repo, follow the instructions [here](https://github.com/newren/git-filter-repo/blob/main/INSTALL.md) or use homebrew
+
+### Homebrew
+```bash
+brew install git-filter-repo
+```
+
 ## Installation
+
+### Homebrew
+
+To install the Commit Author Refresher using [Homebrew](https://brew.sh/), run the following command:
+
+```bash
+brew tap pkarpovich/apps
+brew install pkarpovich/apps/commit-author-refresher
+```
+
+### Manual Installation
 
 To install the Commit Author Refresher, make sure you have [Go](https://golang.org/dl/) installed on your system. Then, clone the repository and build the binary:
 
