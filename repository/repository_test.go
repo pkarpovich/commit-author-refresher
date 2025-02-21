@@ -151,7 +151,7 @@ func TestRunCommandWithOutput(t *testing.T) {
 }
 
 func TestRunCommand(t *testing.T) {
-	if err := runCommand("", "echo", "test"); err != nil {
+	if err := runCommand("", "status"); err != nil {
 		t.Fatalf("runCommand failed: %v", err)
 	}
 }
@@ -169,7 +169,7 @@ func TestInitOriginalRepo(t *testing.T) {
 	}()
 
 	bareRepoDir := filepath.Join(tempDir, "bare-repo.git")
-	if err := runCommand(tempDir, "git", "init", "--bare", bareRepoDir); err != nil {
+	if err := runCommand(tempDir, "init", "--bare", bareRepoDir); err != nil {
 		t.Fatalf("failed to create bare repository: %v", err)
 	}
 

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/pkarpovich/commit-author-refresher/repository"
@@ -57,7 +59,25 @@ func parseFlags() options {
 }
 
 func readConfig(configFile string) ([]repository.Repository, error) {
-	data, err := os.ReadFile(configFile)
+	workDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get working directory: %w", err)
+	}
+
+	absPath, err := filepath.Abs(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration file path %q: %w", configFile, err)
+	}
+
+	if !strings.HasPrefix(absPath, workDir) {
+		return nil, fmt.Errorf("configuration file must be within the current directory")
+	}
+
+	if !strings.HasSuffix(absPath, ".json") {
+		return nil, fmt.Errorf("configuration file must have .json extension")
+	}
+
+	data, err := os.ReadFile(filepath.Clean(absPath))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read configuration file %q: %w", configFile, err)
 	}

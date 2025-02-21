@@ -17,6 +17,18 @@ const (
 	remoteRefPrefix = "refs/remotes/" + remoteName
 )
 
+const gitFilterRepoScriptTemplate = `
+if commit.committer_email not in [%s]:
+    commit.committer_name = b"%s"
+    commit.committer_email = b"%s"
+
+if commit.author_email not in [%s]:
+    commit.author_name = b"%s"
+    commit.author_email = b"%s"
+
+commit.message = commit.message.replace(b"%s", b"%s")
+`
+
 type Author struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
@@ -40,19 +52,19 @@ func (r *Refresher) ProcessRepository() error {
 		return err
 	}
 	defer func() {
-		err := os.RemoveAll(tempRepoDir)
-		if err != nil {
+		removeErr := os.RemoveAll(tempRepoDir)
+		if removeErr != nil {
 			log.Printf("Failed to remove temporary directory: %v\n", err)
 		}
 	}()
 
-	if err = r.initOriginalRepo(tempRepoDir); err != nil {
+	if err := r.initOriginalRepo(tempRepoDir); err != nil {
 		return err
 	}
-	if err = r.updateCommits(tempRepoDir); err != nil {
+	if err := r.updateCommits(tempRepoDir); err != nil {
 		return err
 	}
-	if err = r.pushChangesToTargetRepo(tempRepoDir); err != nil {
+	if err := r.pushChangesToTargetRepo(tempRepoDir); err != nil {
 		return err
 	}
 
@@ -68,17 +80,17 @@ func prepareTempFolder() (string, error) {
 	return tempRepoDir, nil
 }
 
-func runCommand(dir, name string, args ...string) error {
+func runCommand(dir string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("command %s failed: %v", name, err)
+		return fmt.Errorf("command git failed: %v", err)
 	}
 	return nil
 }
@@ -151,7 +163,7 @@ func (r *Refresher) initBranches(dir string) error {
 
 		branchName := strings.TrimPrefix(branch, remoteName+"/")
 		if branchName != "" {
-			if err := runCommand(dir, "git", "checkout", "-b", branchName, branch); err != nil {
+			if err := runCommand(dir, "checkout", "-b", branchName, branch); err != nil {
 				return err
 			}
 		}
@@ -160,13 +172,13 @@ func (r *Refresher) initBranches(dir string) error {
 }
 
 func (r *Refresher) initOriginalRepo(dir string) error {
-	if err := runCommand(dir, "git", "init"); err != nil {
+	if err := runCommand(dir, "init"); err != nil {
 		return err
 	}
-	if err := runCommand(dir, "git", "remote", "add", "old-repo", r.Repo.OriginalRepo); err != nil {
+	if err := runCommand(dir, "remote", "add", "old-repo", r.Repo.OriginalRepo); err != nil {
 		return err
 	}
-	if err := runCommand(dir, "git", "fetch", "old-repo"); err != nil {
+	if err := runCommand(dir, "fetch", "old-repo"); err != nil {
 		return err
 	}
 	return r.initBranches(dir)
@@ -194,27 +206,17 @@ func (r *Refresher) updateCommits(dir string) error {
 
 	excludedEmailsString := r.prepareExcludedEmails()
 
-	script := fmt.Sprintf(`
-if commit.committer_email not in [%s]:
-	commit.committer_name = b"%s"
-	commit.committer_email = b"%s"
-
-if commit.author_email not in [%s]:
-	commit.author_name = b"%s"
-	commit.author_email = b"%s"
-
-commit.message = commit.message.replace(b"%s", b"%s")
-`, excludedEmailsString, r.Repo.Author.Name, r.Repo.Author.Email,
+	script := fmt.Sprintf(gitFilterRepoScriptTemplate, excludedEmailsString, r.Repo.Author.Name, r.Repo.Author.Email,
 		excludedEmailsString, r.Repo.Author.Name, r.Repo.Author.Email,
 		originalUser, targetUser,
 	)
 
-	return runCommand(dir, "git", "filter-repo", "--force", "--commit-callback", script)
+	return runCommand(dir, "filter-repo", "--force", "--commit-callback", script)
 }
 
 func (r *Refresher) pushChangesToTargetRepo(dir string) error {
-	if err := runCommand(dir, "git", "remote", "add", "target-repo", r.Repo.TargetRepo); err != nil {
+	if err := runCommand(dir, "remote", "add", "target-repo", r.Repo.TargetRepo); err != nil {
 		return err
 	}
-	return runCommand(dir, "git", "push", "--all", "--force", "target-repo")
+	return runCommand(dir, "push", "--all", "--force", "target-repo")
 }
