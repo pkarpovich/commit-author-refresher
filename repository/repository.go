@@ -2,12 +2,19 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
+	"time"
+)
+
+const (
+	remoteName      = "old-repo"
+	remoteRefPrefix = "refs/remotes/" + remoteName
 )
 
 type Author struct {
@@ -23,22 +30,34 @@ type Repository struct {
 	ExcludedAuthors []string `json:"excludedAuthors"`
 }
 
-type RepositoryContext struct {
+type Refresher struct {
 	Repo Repository
 }
 
-func (ctx *RepositoryContext) ProcessRepository() {
+func (r *Refresher) ProcessRepository() error {
 	tempRepoDir, err := prepareTempFolder()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	defer os.RemoveAll(tempRepoDir)
+	defer func() {
+		err := os.RemoveAll(tempRepoDir)
+		if err != nil {
+			log.Printf("Failed to remove temporary directory: %v\n", err)
+		}
+	}()
 
-	ctx.initOriginalRepo()
-	ctx.updateCommits()
-	ctx.pushChangesToTargetRepo()
+	if err = r.initOriginalRepo(tempRepoDir); err != nil {
+		return err
+	}
+	if err = r.updateCommits(tempRepoDir); err != nil {
+		return err
+	}
+	if err = r.pushChangesToTargetRepo(tempRepoDir); err != nil {
+		return err
+	}
 
-	log.Printf("Updated commits have been pushed to the target repository: %s\n", ctx.Repo.TargetRepo)
+	log.Printf("Updated commits have been pushed to the target repository: %s\n", r.Repo.TargetRepo)
+	return nil
 }
 
 func prepareTempFolder() (string, error) {
@@ -46,116 +65,156 @@ func prepareTempFolder() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create temporary directory: %v", err)
 	}
-
-	err = os.Chdir(tempRepoDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to change directory to temporary directory: %v", err)
-	}
-
 	return tempRepoDir, nil
 }
 
-func runCommand(name string, arg ...string) {
-	cmd := exec.Command(name, arg...)
+func runCommand(dir, name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	err := cmd.Run()
-	if err != nil {
-		log.Fatal(err)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("command %s failed: %v", name, err)
 	}
+	return nil
 }
 
-func runCommandWithOutput(name string, arg ...string) (string, error) {
-	cmd := exec.Command(name, arg...)
+func runCommandWithOutput(dir, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
 
-	err := cmd.Run()
-	if err != nil {
-		return "", err
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("command %s failed: %v", name, err)
 	}
-
 	return out.String(), nil
 }
 
-func extractUsernameFromRepoURL(repoURL string) (string, error) {
-	re := regexp.MustCompile(`https://github\.com/([^/]+)/[^/]+\.git`)
-	matches := re.FindStringSubmatch(repoURL)
-	if len(matches) == 0 {
-		return "", fmt.Errorf("failed to extract username from repository URL: %s", repoURL)
+func extractOwnerFromRepoURL(repoURL string) (string, error) {
+	if strings.HasPrefix(repoURL, "http://") || strings.HasPrefix(repoURL, "https://") {
+		u, err := url.Parse(repoURL)
+		if err != nil {
+			return "", fmt.Errorf("failed to parse URL: %v", err)
+		}
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) < 2 {
+			return "", fmt.Errorf("unexpected URL format: %s", repoURL)
+		}
+		return parts[0], nil
 	}
-	return matches[1], nil
+
+	if strings.HasPrefix(repoURL, "git@") {
+		parts := strings.SplitN(repoURL, ":", 2)
+		if len(parts) != 2 {
+			return "", fmt.Errorf("unexpected SSH URL format: %s", repoURL)
+		}
+
+		pathParts := strings.Split(strings.Trim(parts[1], "/"), "/")
+		if len(pathParts) < 2 {
+			return "", fmt.Errorf("unexpected SSH URL format: %s", repoURL)
+		}
+		return pathParts[0], nil
+	}
+
+	return "", fmt.Errorf("unsupported URL format: %s", repoURL)
 }
 
-func (ctx *RepositoryContext) initBranches() {
-	branchesOut, err := runCommandWithOutput("git", "branch", "-r")
+func (r *Refresher) initBranches(dir string) error {
+	branchesOut, err := runCommandWithOutput(dir, "git", "for-each-ref", "--format=%(refname:short)", remoteRefPrefix)
 	if err != nil {
-		log.Fatalf("error getting branches: %v", err)
+		return fmt.Errorf("error getting branches: %v", err)
 	}
 
 	branches := strings.Split(branchesOut, "\n")
 	for _, branch := range branches {
-		branch = strings.TrimSpace(strings.Replace(branch, "old-repo/", "", 1))
-		if branch != "" && branch != "HEAD" {
-			runCommand("git", "checkout", "-b", branch, "old-repo/"+branch)
+		branch = strings.TrimSpace(branch)
+		if branch == "" {
+			continue
+		}
+
+		if branch == remoteName || branch == remoteName+"/HEAD" {
+			continue
+		}
+
+		if !strings.Contains(branch, "/") {
+			continue
+		}
+
+		branchName := strings.TrimPrefix(branch, remoteName+"/")
+		if branchName != "" {
+			if err := runCommand(dir, "git", "checkout", "-b", branchName, branch); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func (ctx *RepositoryContext) initOriginalRepo() {
-	runCommand("git", "init")
-	runCommand("git", "remote", "add", "old-repo", ctx.Repo.OriginalRepo)
-	runCommand("git", "fetch", "old-repo")
-
-	ctx.initBranches()
-}
-
-func (ctx *RepositoryContext) prepareExcludedEmails() string {
-	excludedAuthors := append(ctx.Repo.ExcludedAuthors, ctx.Repo.Author.Email)
-
-	excludedAuthorsBytes := make([]string, len(excludedAuthors))
-	for i, email := range excludedAuthors {
-		excludedAuthorsBytes[i] = "b'" + email + "'"
+func (r *Refresher) initOriginalRepo(dir string) error {
+	if err := runCommand(dir, "git", "init"); err != nil {
+		return err
 	}
-
-	return strings.Join(excludedAuthorsBytes, ",")
+	if err := runCommand(dir, "git", "remote", "add", "old-repo", r.Repo.OriginalRepo); err != nil {
+		return err
+	}
+	if err := runCommand(dir, "git", "fetch", "old-repo"); err != nil {
+		return err
+	}
+	return r.initBranches(dir)
 }
 
-func (ctx *RepositoryContext) updateCommits() {
-	originalUser, err := extractUsernameFromRepoURL(ctx.Repo.OriginalRepo)
+func (r *Refresher) prepareExcludedEmails() string {
+	excludedAuthors := append(r.Repo.ExcludedAuthors, r.Repo.Author.Email)
+	var formatted []string
+	for _, email := range excludedAuthors {
+		formatted = append(formatted, fmt.Sprintf("b'%s'", email))
+	}
+	return strings.Join(formatted, ",")
+}
+
+func (r *Refresher) updateCommits(dir string) error {
+	originalUser, err := extractOwnerFromRepoURL(r.Repo.OriginalRepo)
 	if err != nil {
-		log.Fatalf("error extracting username from originalRepo: %v", err)
+		return fmt.Errorf("error extracting username from originalRepo: %v", err)
 	}
 
-	targetUser, err := extractUsernameFromRepoURL(ctx.Repo.TargetRepo)
+	targetUser, err := extractOwnerFromRepoURL(r.Repo.TargetRepo)
 	if err != nil {
-		log.Fatalf("error extracting username from targetRepo: %v", err)
+		return fmt.Errorf("error extracting username from targetRepo: %v", err)
 	}
 
-	excludedEmailsString := ctx.prepareExcludedEmails()
+	excludedEmailsString := r.prepareExcludedEmails()
 
-	runCommand("git", "filter-repo", "--force", "--commit-callback",
-		fmt.Sprintf(`
-			if commit.committer_email not in [%s]:
-				commit.committer_name = b"%s"
-				commit.committer_email = b"%s"
+	script := fmt.Sprintf(`
+if commit.committer_email not in [%s]:
+	commit.committer_name = b"%s"
+	commit.committer_email = b"%s"
 
-			if commit.author_email not in [%s]:
-				commit.author_name = b"%s"
-				commit.author_email = b"%s"
+if commit.author_email not in [%s]:
+	commit.author_name = b"%s"
+	commit.author_email = b"%s"
 
-			commit.message = commit.message.replace(b"%s", b"%s")
-			`,
-			excludedEmailsString, ctx.Repo.Author.Name, ctx.Repo.Author.Email,
-			excludedEmailsString, ctx.Repo.Author.Name, ctx.Repo.Author.Email,
-			originalUser, targetUser,
-		),
+commit.message = commit.message.replace(b"%s", b"%s")
+`, excludedEmailsString, r.Repo.Author.Name, r.Repo.Author.Email,
+		excludedEmailsString, r.Repo.Author.Name, r.Repo.Author.Email,
+		originalUser, targetUser,
 	)
+
+	return runCommand(dir, "git", "filter-repo", "--force", "--commit-callback", script)
 }
 
-func (ctx *RepositoryContext) pushChangesToTargetRepo() {
-	runCommand("git", "remote", "add", "target-repo", ctx.Repo.TargetRepo)
-	runCommand("git", "push", "--all", "--force", "target-repo")
+func (r *Refresher) pushChangesToTargetRepo(dir string) error {
+	if err := runCommand(dir, "git", "remote", "add", "target-repo", r.Repo.TargetRepo); err != nil {
+		return err
+	}
+	return runCommand(dir, "git", "push", "--all", "--force", "target-repo")
 }

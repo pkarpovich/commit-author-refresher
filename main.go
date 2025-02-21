@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 
@@ -10,50 +12,68 @@ import (
 )
 
 type options struct {
-	ConfigFile string `short:"f" long:"file" description:"config file" default:"caf-config.json"`
-	Project    string `short:"p" long:"project" description:"run only for the specified project"`
+	ConfigFile string `short:"f" long:"file" description:"Configuration file" default:"caf-config.json"`
+	Project    string `short:"p" long:"project" description:"Run only for the specified project"`
 }
 
 func main() {
-	var opts options
-	p := flags.NewParser(&opts, flags.PrintErrors|flags.PassDoubleDash|flags.HelpFlag)
-	if _, err := p.Parse(); err != nil {
-		if err.(*flags.Error).Type != flags.ErrHelp {
-			os.Exit(1)
-		}
-		os.Exit(2)
-	}
-
-	data, err := os.ReadFile(opts.ConfigFile)
+	opts := parseFlags()
+	repositories, err := readConfig(opts.ConfigFile)
 	if err != nil {
-		log.Fatalf("Failed to read configuration file: %s", opts.ConfigFile)
-	}
-
-	var repositories []repository.Repository
-	err = json.Unmarshal(data, &repositories)
-	if err != nil {
-		log.Fatalf("Failed to parse configuration file: %s. Error: %v", opts.ConfigFile, err)
+		log.Fatalf("Failed to read config: %v", err)
 	}
 
 	if opts.Project != "" {
-		repo := find(repositories, opts.Project)
-		ctx := repository.RepositoryContext{Repo: *repo}
-		ctx.ProcessRepository()
+		repo, err := findRepository(repositories, opts.Project)
+		if err != nil {
+			log.Fatalf("Project %q not found: %v", opts.Project, err)
+		}
+		refresher := repository.Refresher{Repo: *repo}
+		if err := refresher.ProcessRepository(); err != nil {
+			log.Fatalf("Failed to process repository %q: %v", opts.Project, err)
+		}
 		return
 	}
 
 	for _, repo := range repositories {
-		ctx := repository.RepositoryContext{Repo: repo}
-		ctx.ProcessRepository()
+		refresher := repository.Refresher{Repo: repo}
+		if err := refresher.ProcessRepository(); err != nil {
+			log.Fatalf("Failed to process repository %q: %v", repo.Name, err)
+		}
 	}
 }
 
-func find(repositories []repository.Repository, name string) *repository.Repository {
-	for _, repo := range repositories {
-		if repo.Name == name {
-			return &repo
+func parseFlags() options {
+	var opts options
+	parser := flags.NewParser(&opts, flags.PrintErrors|flags.PassDoubleDash|flags.HelpFlag)
+	if _, err := parser.Parse(); err != nil {
+		var flagsErr *flags.Error
+		if errors.As(err, &flagsErr) && errors.Is(flagsErr.Type, flags.ErrHelp) {
+			os.Exit(2)
 		}
+		os.Exit(1)
+	}
+	return opts
+}
+
+func readConfig(configFile string) ([]repository.Repository, error) {
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read configuration file %q: %w", configFile, err)
 	}
 
-	return nil
+	var repositories []repository.Repository
+	if err = json.Unmarshal(data, &repositories); err != nil {
+		return nil, fmt.Errorf("failed to parse configuration file %q: %w", configFile, err)
+	}
+	return repositories, nil
+}
+
+func findRepository(repos []repository.Repository, name string) (*repository.Repository, error) {
+	for i := range repos {
+		if repos[i].Name == name {
+			return &repos[i], nil
+		}
+	}
+	return nil, fmt.Errorf("repository with name %q not found", name)
 }
